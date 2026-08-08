@@ -29,6 +29,7 @@ static const size_t COLOR_POOL_COUNT = sizeof(COLOR_POOL) / sizeof(COLOR_POOL[0]
 
 #define MAX_POOL_COLORS 32
 #define DEFAULT_MARGIN 32
+#define DEFAULT_MOD_PAD ""
 
 #define IPC_CMD_PAUSE 'P'
 #define IPC_CMD_RESUME 'R'
@@ -167,6 +168,7 @@ struct wsk_state {
 	char target_output_name[128];
 	uint32_t anchor;
 	int margin;
+	char mod_pad[16];
 	float opacity;
 
 	int32_t target_x, target_y, target_w, target_h;
@@ -319,6 +321,18 @@ static const char *keypress_display(struct wsk_state *state, struct wsk_keypress
 	return key->name;
 }
 
+/* Padding inserted before a key. Modifier keys are followed by the key they
+ * modify — give that transition an explicit gap (state->mod_pad, -M flag). */
+static const char *key_pad_before(const struct wsk_state *state, const char *prev_display, bool prev_is_mod,
+				  const char *name) {
+	size_t prev_len = prev_display ? strlen(prev_display) : 0;
+	if (prev_len > 0 && prev_display[prev_len - 1] == '+')
+		return "";
+	if (prev_is_mod && find_modifier(name) < 0)
+		return state->mod_pad;
+	return KEY_PAD_BEFORE;
+}
+
 //show key in keylink(begin at state->keys)
 static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, uint32_t *width, uint32_t *height) {
 	cairo_set_operator(cairo, CAIRO_OPERATOR_SOURCE);
@@ -336,9 +350,11 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, 
 	/* Second pass: draw keys with vertical alignment offset */
 	struct wsk_keypress *key = state->keys;
 	const char *prev_display = nullptr;
+	bool prev_is_mod = false;
 	size_t position = 0;
 	while (key) {
 		const char *display = keypress_display(state, key);
+		bool is_mod = find_modifier(key->name) >= 0;
 		uint32_t color;
 
 		const KeymapEntry *entry = keymap_entry(key->name);
@@ -361,8 +377,7 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, 
 			color = state->repeatfg;
 		}
 
-		size_t prev_len = prev_display ? strlen(prev_display) : 0;
-		const char *pad_before = (prev_len > 0 && prev_display[prev_len - 1] == '+') ? "" : KEY_PAD_BEFORE;
+		const char *pad_before = key_pad_before(state, prev_display, prev_is_mod, key->name);
 
 		const char *use_font = key->is_repeat ? state->repeat_font : state->font;
 		int w, h;
@@ -387,6 +402,7 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, 
 		prev_display = display;
 		key = key->next;
 		position++;
+		prev_is_mod = is_mod;
 	}
 }
 
@@ -1451,6 +1467,8 @@ static void apply_opacity_and_reply(struct wsk_state *state, int client_fd, floa
 
 static void init_state_defaults(struct wsk_state *state) {
 	state->margin = DEFAULT_MARGIN;
+	strncpy(state->mod_pad, DEFAULT_MOD_PAD, sizeof(state->mod_pad) - 1);
+	state->mod_pad[sizeof(state->mod_pad) - 1] = '\0';
 	state->background = COLOR_BACKGROUND;
 	state->specialfg = COLOR_SPECIAL_FG;
 	state->repeatfg = COLOR_REPEAT_FG;
@@ -1480,7 +1498,7 @@ static void parse_and_init(struct wsk_state *state, int argc, char *argv[], bool
 	bool validate_config = false;
 	int c;
 	opterr = 0;
-	while ((c = getopt(argc, argv, "hib:cf:s:r:F:t:a:m:o:l:w:p::D:H:PRKO::dx:g:T:")) != -1) {
+	while ((c = getopt(argc, argv, "hib:cf:s:r:F:t:a:m:M:o:l:w:p::D:H:PRKO::dx:g:T:")) != -1) {
 		switch (c) {
 			case 'l':
 				state->length_limit = (int) strtol(optarg, nullptr, 10);
@@ -1525,6 +1543,10 @@ static void parse_and_init(struct wsk_state *state, int argc, char *argv[], bool
 			case 'm':
 				state->margin = (int) strtol(optarg, nullptr, 10);
 				state->has_explicit_margin = true;
+				break;
+			case 'M':
+				strncpy(state->mod_pad, optarg, sizeof(state->mod_pad) - 1);
+				state->mod_pad[sizeof(state->mod_pad) - 1] = '\0';
 				break;
 			case 'i':
 				state->inspect = true;
@@ -1599,7 +1621,7 @@ static void parse_and_init(struct wsk_state *state, int argc, char *argv[], bool
 				break;
 			case '?':
 				fprintf(stderr, "usage: wshowkeys [-b|-f|-s|-r #RRGGBB[AA]] [-F font] "
-						"[-t timeout]\n\t[-a top|left|right|bottom|center] [-m margin] "
+						"[-t timeout]\n\t[-a top|left|right|bottom|center] [-m margin] [-M modpad] "
 						"[-o output] [-l numOfLengthLimit] [-w pixels] [-H padding] [-i] [-P] "
 						"[-c] [-R] [-O [opacity]] [-K] [-p[colors]] [-g X,Y[,WxH]] [-T "
 						"left|center|right]");
@@ -1607,6 +1629,7 @@ static void parse_and_init(struct wsk_state *state, int argc, char *argv[], bool
 				fprintf(stderr, "-K          reload keymap config\n");
 				fprintf(stderr, "-p[colors]  toggle (no arg) or set (with colors) the color pool\n");
 				fprintf(stderr, "-g X,Y[,WxH]  position overlay at absolute coordinates\n");
+				fprintf(stderr, "-M <string>  padding before the key in a modifier combo (off by default)\n");
 				exit(1);
 		}
 	}
@@ -1978,29 +2001,23 @@ static void event_loop(struct wsk_state *state) {
 			} else {
 				int all_key_len = 0;
 				const char *prev_display = nullptr;
+				bool prev_is_mod = false;
 				while (key) {
 					const char *display = keypress_display(state, key);
+					bool is_mod = find_modifier(key->name) >= 0;
+					const char *pad_before = key_pad_before(state, prev_display, prev_is_mod, key->name);
 					if (state->fixed_width && state->recording_cairo) {
-						size_t prev_len = prev_display ? strlen(prev_display) : 0;
-						const char *pad_before =
-							(prev_len > 0 && prev_display[prev_len - 1] == '+')
-								? ""
-								: KEY_PAD_BEFORE;
 						int kw = 0, kh = 0;
 						int cur_scale = state->output ? state->output->scale : 1;
 						get_text_size(state->recording_cairo, state->font, &kw, &kh, nullptr,
 							      cur_scale, "%s%s%s", pad_before, display, KEY_PAD_AFTER);
 						all_key_len += kw;
 					} else {
-						size_t prev_len = prev_display ? strlen(prev_display) : 0;
-						const char *pad_before =
-							(prev_len > 0 && prev_display[prev_len - 1] == '+')
-								? ""
-								: KEY_PAD_BEFORE;
 						all_key_len +=
 							strlen(pad_before) + strlen(display) + strlen(KEY_PAD_AFTER);
 					}
 					prev_display = display;
+					prev_is_mod = is_mod;
 					key = key->next;
 				}
 				int limit = state->fixed_width

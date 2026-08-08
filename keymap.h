@@ -56,12 +56,12 @@ static const KeymapEntry keymap[] = {
 	// K("Return",    "⏎"),
 	K("Return",    "⮐"),
 	K("space",     "␣", "#ebdbb230"),
-	K("Escape",    "⎌"), // ␛
-	K("Control",   "⎈"),
-	K("Alt",       "✵"),
+	K("Escape",    "󱊷"), // ␛
+	K("Control",   ""),
+	K("Alt",       ""),
 	K("Meta",      "✵"),
 	K("Shift",     "⇧"),
-	K("Super",     "✬"),
+	K("Super",     ""),
 	K("Tab",       "⮔"),
 	K("backslash", "∖"),
 	K("BackSpace", "␈"),

@@ -67,6 +67,9 @@ wiv [-b|-f|-s|-r #RRGGBB[AA]] [-F font] [-t timeout]
   specified twice (e.g. `-a top -a left`). `center` can be combined with an
   edge anchor (e.g. `-a top -a center` to center horizontally at the top).
 - *-m margin*: set a margin (in pixels) from the nearest edge
+- *-M pad*: set the padding string inserted between a held modifier (Ctrl/Alt/Super/Shift)
+  and the key it modifies, e.g. `-M ' '` renders `Ctrl C` instead of `CtrlC`.
+  Off by default; any `-M` value enables it, `-M ''` explicitly disables.
 - *-l lenmax*: set the key layer lenmax
 - *-w [pixels]*: use a fixed overlay width instead of resizing per keystroke.
   Without a value, width is computed from `-l` and the current font via Pango.
